@@ -103,7 +103,6 @@ class GraphBuilder:
         self.keywords: Dict[str, Dict[str, Any]] = {}
         self.journals: Dict[str, Dict[str, Any]] = {}
         self.journal_volumes: Dict[str, Dict[str, Any]] = {}
-        self.proceedings: Dict[str, Dict[str, Any]] = {}
         self.editions: Dict[str, Dict[str, Any]] = {}
         self.venues: Dict[str, Dict[str, Any]] = {}
 
@@ -113,9 +112,8 @@ class GraphBuilder:
         self.cites: Set[Tuple[str, str]] = set()
         self.has_keyword: Set[Tuple[str, str]] = set()
         self.published_in_volume: Set[Tuple[str, str]] = set()
-        self.published_in_proceedings: Set[Tuple[str, str]] = set()
+        self.published_in_edition: Set[Tuple[str, str]] = set()
         self.volume_of: Set[Tuple[str, str]] = set()
-        self.for_edition: Set[Tuple[str, str]] = set()
         self.edition_of: Set[Tuple[str, str]] = set()
 
         self.paper_authors: Dict[str, Set[str]] = defaultdict(set)
@@ -145,28 +143,31 @@ class GraphBuilder:
         if term:
             self.keywords.setdefault(term, {"term": term})
 
-    def make_paper_id(self, row: Dict[str, str], fallback_prefix: str) -> str:
+    def make_paper_doi(self, row: Dict[str, str], fallback_prefix: str) -> str:
+        doi = guess_doi(row.get("ee", ""))
+        if doi:
+            return doi
+
         key = (row.get("key") or "").strip()
         title = (row.get("title") or "untitled").strip()
         year = safe_int(row.get("year"), 2000)
         if key:
-            return f"paper_{slug(key)}"
-        return f"paper_{slug(fallback_prefix + '-' + title + '-' + str(year))}"
+            return f"10.synthetic/{slug(key)}"
+        return f"10.synthetic/{slug(fallback_prefix + '-' + title + '-' + str(year))}"
 
     def add_citation_stub(self, raw_cite: str) -> str:
-        cited_id = f"paper_{slug(raw_cite)}"
+        cited_doi = raw_cite if re.match(r"^10\.\S+", raw_cite) else f"10.synthetic/cite-{slug(raw_cite)}"
         self.papers.setdefault(
-            cited_id,
+            cited_doi,
             {
-                "paperId": cited_id,
-                "doi": "",
+                "DOI": cited_doi,
                 "title": raw_cite,
                 "year": 2000,
                 "abstract": f"Synthetic abstract for {raw_cite}.",
                 "pages": "unknown",
             },
         )
-        return cited_id
+        return cited_doi
 
     def process_article_row(self, row: Dict[str, str]) -> None:
         key = (row.get("key") or "").strip()
@@ -179,17 +180,15 @@ class GraphBuilder:
         if not title or not journal_name:
             return
 
-        paper_id = self.make_paper_id(row, "article")
+        paper_doi = self.make_paper_doi(row, "article")
         year = safe_int(row.get("year"), 2000)
         pages = (row.get("pages") or "unknown").strip()
-        doi = guess_doi(row.get("ee", ""))
         volume = str(row.get("volume") or "1").strip()
 
         self.papers.setdefault(
-            paper_id,
+            paper_doi,
             {
-                "paperId": paper_id,
-                "doi": doi,
+                "DOI": paper_doi,
                 "title": title,
                 "year": year,
                 "abstract": f"Synthetic abstract for {title}.",
@@ -198,20 +197,20 @@ class GraphBuilder:
         )
 
         if key:
-            self.paper_lookup[key] = paper_id
+            self.paper_lookup[key] = paper_doi
 
         authors = split_multi(row.get("author", ""))
         for pos, author_name in enumerate(authors, start=1):
             author_id = self.add_author(author_name)
-            self.authored.add((author_id, paper_id, pos))
-            self.paper_authors[paper_id].add(author_id)
+            self.authored.add((author_id, paper_doi, pos))
+            self.paper_authors[paper_doi].add(author_id)
 
         if authors:
-            self.corresponding_author.add((f"author_{slug(authors[0])}", paper_id))
+            self.corresponding_author.add((paper_doi, f"author_{slug(authors[0])}"))
 
         for kw in self.infer_keywords(title):
             self.add_keyword(kw)
-            self.has_keyword.add((paper_id, kw))
+            self.has_keyword.add((paper_doi, kw))
 
         journal_id = f"journal_{slug(journal_name)}"
         jv_id = f"jv_{slug(journal_name)}_{year}_{slug(volume)}"
@@ -222,19 +221,19 @@ class GraphBuilder:
         )
         self.journal_volumes.setdefault(
             jv_id,
-            {"journalVolumeId": jv_id, "year": year, "volume": volume},
+            {"journalVolumeId": jv_id, "year": year, "volumeNumber": volume},
         )
 
         self.volume_of.add((jv_id, journal_id))
-        self.published_in_volume.add((paper_id, jv_id))
+        self.published_in_volume.add((paper_doi, jv_id))
 
         for cited in split_multi(row.get("cite", "")):
             if cited == "..." or cited.lower() == "omitted":
                 continue
-            cited_paper_id = self.paper_lookup.get(cited)
-            if not cited_paper_id:
-                cited_paper_id = self.add_citation_stub(cited)
-            self.cites.add((paper_id, cited_paper_id))
+            cited_paper_doi = self.paper_lookup.get(cited)
+            if not cited_paper_doi:
+                cited_paper_doi = self.add_citation_stub(cited)
+            self.cites.add((paper_doi, cited_paper_doi))
 
     def process_inproceedings_row(self, row: Dict[str, str]) -> None:
         key = (row.get("key") or "").strip()
@@ -247,16 +246,14 @@ class GraphBuilder:
         if not title or not venue_name:
             return
 
-        paper_id = self.make_paper_id(row, "inproceedings")
+        paper_doi = self.make_paper_doi(row, "inproceedings")
         year = safe_int(row.get("year"), 2000)
         pages = (row.get("pages") or "unknown").strip()
-        doi = guess_doi(row.get("ee", ""))
 
         self.papers.setdefault(
-            paper_id,
+            paper_doi,
             {
-                "paperId": paper_id,
-                "doi": doi,
+                "DOI": paper_doi,
                 "title": title,
                 "year": year,
                 "abstract": f"Synthetic abstract for {title}.",
@@ -265,48 +262,44 @@ class GraphBuilder:
         )
 
         if key:
-            self.paper_lookup[key] = paper_id
+            self.paper_lookup[key] = paper_doi
 
         authors = split_multi(row.get("author", ""))
         for pos, author_name in enumerate(authors, start=1):
             author_id = self.add_author(author_name)
-            self.authored.add((author_id, paper_id, pos))
-            self.paper_authors[paper_id].add(author_id)
+            self.authored.add((author_id, paper_doi, pos))
+            self.paper_authors[paper_doi].add(author_id)
 
         if authors:
-            self.corresponding_author.add((f"author_{slug(authors[0])}", paper_id))
+            self.corresponding_author.add((paper_doi, f"author_{slug(authors[0])}"))
 
         for kw in self.infer_keywords(title):
             self.add_keyword(kw)
-            self.has_keyword.add((paper_id, kw))
+            self.has_keyword.add((paper_doi, kw))
 
         venue_id = f"venue_{slug(venue_name)}"
         edition_id = f"edition_{slug(venue_name)}_{year}"
-        proceeding_id = f"proc_{slug(venue_name)}_{year}"
 
         proc_meta = self.proc_meta_by_key.get((venue_name.lower(), year), {})
         city = proc_meta.get("city", "Unknown City")
-        isbn = proc_meta.get("isbn", "unknown")
-        proc_title = proc_meta.get("proceeding_title", f"Proceedings of {venue_name} {year}")
+        proceedings_title = proc_meta.get("proceedings_title", f"Proceedings of {venue_name} {year}")
 
         self.venues.setdefault(venue_id, {"venueId": venue_id, "name": venue_name})
-        self.editions.setdefault(edition_id, {"editionId": edition_id, "year": year, "city": city})
-        self.proceedings.setdefault(
-            proceeding_id,
-            {"proceedingId": proceeding_id, "title": proc_title, "isbn": isbn},
+        self.editions.setdefault(
+            edition_id,
+            {"editionId": edition_id, "year": year, "city": city, "proceedingsTitle": proceedings_title},
         )
 
         self.edition_of.add((edition_id, venue_id))
-        self.for_edition.add((proceeding_id, edition_id))
-        self.published_in_proceedings.add((paper_id, proceeding_id))
+        self.published_in_edition.add((paper_doi, edition_id))
 
         for cited in split_multi(row.get("cite", "")):
             if cited == "..." or cited.lower() == "omitted":
                 continue
-            cited_paper_id = self.paper_lookup.get(cited)
-            if not cited_paper_id:
-                cited_paper_id = self.add_citation_stub(cited)
-            self.cites.add((paper_id, cited_paper_id))
+            cited_paper_doi = self.paper_lookup.get(cited)
+            if not cited_paper_doi:
+                cited_paper_doi = self.add_citation_stub(cited)
+            self.cites.add((paper_doi, cited_paper_doi))
 
     def load_proceedings_metadata(self, rows: List[Dict[str, str]]) -> None:
         for row in rows:
@@ -322,13 +315,9 @@ class GraphBuilder:
             if not venue_name:
                 continue
 
-            isbn_values = split_multi(row.get("isbn", ""))
-            isbn = isbn_values[0] if isbn_values else "unknown"
-
             self.proc_meta_by_key[(venue_name.lower(), year)] = {
                 "city": (row.get("address") or "Unknown City").strip() or "Unknown City",
-                "isbn": isbn,
-                "proceeding_title": (row.get("title") or f"Proceedings of {venue_name} {year}").strip(),
+                "proceedings_title": (row.get("title") or f"Proceedings of {venue_name} {year}").strip(),
             }
 
     def synthesize_reviewers(self) -> None:
@@ -346,23 +335,21 @@ class GraphBuilder:
         os.makedirs(out_dir, exist_ok=True)
 
         self._write(out_dir, "authors.csv", ["authorId", "name"], self.authors.values())
-        self._write(out_dir, "papers.csv", ["paperId", "doi", "title", "year", "abstract", "pages"], self.papers.values())
+        self._write(out_dir, "papers.csv", ["DOI", "title", "year", "abstract", "pages"], self.papers.values())
         self._write(out_dir, "keywords.csv", ["term"], self.keywords.values())
         self._write(out_dir, "journals.csv", ["journalId", "name", "issn"], self.journals.values())
-        self._write(out_dir, "journal_volumes.csv", ["journalVolumeId", "year", "volume"], self.journal_volumes.values())
-        self._write(out_dir, "proceedings.csv", ["proceedingId", "title", "isbn"], self.proceedings.values())
-        self._write(out_dir, "editions.csv", ["editionId", "year", "city"], self.editions.values())
+        self._write(out_dir, "journal_volumes.csv", ["journalVolumeId", "year", "volumeNumber"], self.journal_volumes.values())
+        self._write(out_dir, "editions.csv", ["editionId", "year", "city", "proceedingsTitle"], self.editions.values())
         self._write(out_dir, "venues.csv", ["venueId", "name"], self.venues.values())
 
-        self._write_tuples(out_dir, "authored.csv", ["authorId", "paperId", "position"], sorted(self.authored))
-        self._write_tuples(out_dir, "corresponding_author.csv", ["authorId", "paperId"], sorted(self.corresponding_author))
-        self._write_tuples(out_dir, "reviewed.csv", ["authorId", "paperId"], sorted(self.reviewed))
-        self._write_tuples(out_dir, "cites.csv", ["citingPaperId", "citedPaperId"], sorted(self.cites))
-        self._write_tuples(out_dir, "has_keyword.csv", ["paperId", "term"], sorted(self.has_keyword))
-        self._write_tuples(out_dir, "published_in_volume.csv", ["paperId", "journalVolumeId"], sorted(self.published_in_volume))
-        self._write_tuples(out_dir, "published_in_proceedings.csv", ["paperId", "proceedingId"], sorted(self.published_in_proceedings))
+        self._write_tuples(out_dir, "authored.csv", ["authorId", "DOI", "position"], sorted(self.authored))
+        self._write_tuples(out_dir, "corresponding_author.csv", ["DOI", "authorId"], sorted(self.corresponding_author))
+        self._write_tuples(out_dir, "reviewed.csv", ["authorId", "DOI"], sorted(self.reviewed))
+        self._write_tuples(out_dir, "cites.csv", ["citingDOI", "citedDOI"], sorted(self.cites))
+        self._write_tuples(out_dir, "has_keyword.csv", ["DOI", "term"], sorted(self.has_keyword))
+        self._write_tuples(out_dir, "published_in_volume.csv", ["DOI", "journalVolumeId"], sorted(self.published_in_volume))
+        self._write_tuples(out_dir, "published_in_edition.csv", ["DOI", "editionId"], sorted(self.published_in_edition))
         self._write_tuples(out_dir, "volume_of.csv", ["journalVolumeId", "journalId"], sorted(self.volume_of))
-        self._write_tuples(out_dir, "for_edition.csv", ["proceedingId", "editionId"], sorted(self.for_edition))
         self._write_tuples(out_dir, "edition_of.csv", ["editionId", "venueId"], sorted(self.edition_of))
 
     @staticmethod
@@ -385,11 +372,10 @@ class GraphBuilder:
 def write_load_cypher(out_dir: str) -> None:
     query = r'''
 CREATE CONSTRAINT author_id IF NOT EXISTS FOR (a:Author) REQUIRE a.authorId IS UNIQUE;
-CREATE CONSTRAINT paper_id IF NOT EXISTS FOR (p:Paper) REQUIRE p.paperId IS UNIQUE;
+CREATE CONSTRAINT paper_doi IF NOT EXISTS FOR (p:Paper) REQUIRE p.DOI IS UNIQUE;
 CREATE CONSTRAINT keyword_term IF NOT EXISTS FOR (k:Keyword) REQUIRE k.term IS UNIQUE;
 CREATE CONSTRAINT journal_id IF NOT EXISTS FOR (j:Journal) REQUIRE j.journalId IS UNIQUE;
 CREATE CONSTRAINT journal_volume_id IF NOT EXISTS FOR (jv:JournalVolume) REQUIRE jv.journalVolumeId IS UNIQUE;
-CREATE CONSTRAINT proceeding_id IF NOT EXISTS FOR (pr:Proceedings) REQUIRE pr.proceedingId IS UNIQUE;
 CREATE CONSTRAINT edition_id IF NOT EXISTS FOR (e:Edition) REQUIRE e.editionId IS UNIQUE;
 CREATE CONSTRAINT venue_id IF NOT EXISTS FOR (v:ConferenceWorkshop) REQUIRE v.venueId IS UNIQUE;
 
@@ -398,9 +384,8 @@ MERGE (a:Author {authorId: row.authorId})
 SET a.name = row.name;
 
 LOAD CSV WITH HEADERS FROM 'file:///papers.csv' AS row
-MERGE (p:Paper {paperId: row.paperId})
-SET p.DOI = row.doi,
-    p.title = row.title,
+MERGE (p:Paper {DOI: row.DOI})
+SET p.title = row.title,
     p.year = toInteger(row.year),
     p.abstract = row.abstract,
     p.pages = row.pages;
@@ -416,17 +401,13 @@ SET j.name = row.name,
 LOAD CSV WITH HEADERS FROM 'file:///journal_volumes.csv' AS row
 MERGE (jv:JournalVolume {journalVolumeId: row.journalVolumeId})
 SET jv.year = toInteger(row.year),
-    jv.volume = row.volume;
-
-LOAD CSV WITH HEADERS FROM 'file:///proceedings.csv' AS row
-MERGE (pr:Proceedings {proceedingId: row.proceedingId})
-SET pr.title = row.title,
-    pr.isbn = row.isbn;
+    jv.volumeNumber = row.volumeNumber;
 
 LOAD CSV WITH HEADERS FROM 'file:///editions.csv' AS row
 MERGE (e:Edition {editionId: row.editionId})
 SET e.year = toInteger(row.year),
-    e.city = row.city;
+    e.city = row.city,
+    e.proceedingsTitle = row.proceedingsTitle;
 
 LOAD CSV WITH HEADERS FROM 'file:///venues.csv' AS row
 MERGE (v:ConferenceWorkshop {venueId: row.venueId})
@@ -434,49 +415,44 @@ SET v.name = row.name;
 
 LOAD CSV WITH HEADERS FROM 'file:///authored.csv' AS row
 MATCH (a:Author {authorId: row.authorId})
-MATCH (p:Paper {paperId: row.paperId})
+MATCH (p:Paper {DOI: row.DOI})
 MERGE (a)-[r:AUTHORED]->(p)
 SET r.position = toInteger(row.position);
 
 LOAD CSV WITH HEADERS FROM 'file:///corresponding_author.csv' AS row
 MATCH (a:Author {authorId: row.authorId})
-MATCH (p:Paper {paperId: row.paperId})
-MERGE (a)-[:CORRESPONDING_AUTHOR]->(p);
+MATCH (p:Paper {DOI: row.DOI})
+MERGE (p)-[:CORRESPONDING_AUTHOR]->(a);
 
 LOAD CSV WITH HEADERS FROM 'file:///reviewed.csv' AS row
 MATCH (a:Author {authorId: row.authorId})
-MATCH (p:Paper {paperId: row.paperId})
+MATCH (p:Paper {DOI: row.DOI})
 MERGE (a)-[:REVIEWED]->(p);
 
 LOAD CSV WITH HEADERS FROM 'file:///cites.csv' AS row
-MATCH (p1:Paper {paperId: row.citingPaperId})
-MATCH (p2:Paper {paperId: row.citedPaperId})
+MATCH (p1:Paper {DOI: row.citingDOI})
+MATCH (p2:Paper {DOI: row.citedDOI})
 MERGE (p1)-[:CITES]->(p2);
 
 LOAD CSV WITH HEADERS FROM 'file:///has_keyword.csv' AS row
-MATCH (p:Paper {paperId: row.paperId})
+MATCH (p:Paper {DOI: row.DOI})
 MATCH (k:Keyword {term: row.term})
 MERGE (p)-[:HAS_KEYWORD]->(k);
 
 LOAD CSV WITH HEADERS FROM 'file:///published_in_volume.csv' AS row
-MATCH (p:Paper {paperId: row.paperId})
+MATCH (p:Paper {DOI: row.DOI})
 MATCH (jv:JournalVolume {journalVolumeId: row.journalVolumeId})
 MERGE (p)-[:PUBLISHED_IN]->(jv);
 
-LOAD CSV WITH HEADERS FROM 'file:///published_in_proceedings.csv' AS row
-MATCH (p:Paper {paperId: row.paperId})
-MATCH (pr:Proceedings {proceedingId: row.proceedingId})
-MERGE (p)-[:PUBLISHED_IN]->(pr);
+LOAD CSV WITH HEADERS FROM 'file:///published_in_edition.csv' AS row
+MATCH (p:Paper {DOI: row.DOI})
+MATCH (e:Edition {editionId: row.editionId})
+MERGE (p)-[:PUBLISHED_IN]->(e);
 
 LOAD CSV WITH HEADERS FROM 'file:///volume_of.csv' AS row
 MATCH (jv:JournalVolume {journalVolumeId: row.journalVolumeId})
 MATCH (j:Journal {journalId: row.journalId})
 MERGE (jv)-[:VOLUME_OF]->(j);
-
-LOAD CSV WITH HEADERS FROM 'file:///for_edition.csv' AS row
-MATCH (pr:Proceedings {proceedingId: row.proceedingId})
-MATCH (e:Edition {editionId: row.editionId})
-MERGE (pr)-[:FOR_EDITION]->(e);
 
 LOAD CSV WITH HEADERS FROM 'file:///edition_of.csv' AS row
 MATCH (e:Edition {editionId: row.editionId})
