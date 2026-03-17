@@ -94,6 +94,48 @@ def read_intermediate_with_header(
 
 
 class GraphBuilder:
+    SYNTHETIC_CITIES = [
+        "Barcelona",
+        "Madrid",
+        "Paris",
+        "Berlin",
+        "Rome",
+        "Lisbon",
+        "Amsterdam",
+        "Vienna",
+        "Prague",
+        "Dublin",
+        "Zurich",
+        "Copenhagen",
+        "Helsinki",
+        "Warsaw",
+        "Brussels",
+    ]
+
+    SYNTHETIC_PAGES = [
+        "1-10",
+        "11-20",
+        "21-30",
+        "31-40",
+        "41-50",
+        "51-60",
+        "61-70",
+        "71-80",
+        "81-90",
+        "91-100",
+        "101-110",
+        "111-120",
+    ]
+
+    ABSTRACT_TEMPLATES = [
+        "This paper studies {topic} using a graph-based approach.",
+        "This work presents a synthetic research summary for {topic}.",
+        "This article explores methods and challenges related to {topic}.",
+        "This contribution investigates {topic} with an experimental methodology.",
+        "This paper analyzes {topic} from a data management perspective.",
+        "This work evaluates techniques and applications related to {topic}.",
+    ]
+
     def __init__(self, reviewers_per_paper: int = 3, seed: int = 42) -> None:
         self.random = random.Random(seed)
         self.reviewers_per_paper = reviewers_per_paper
@@ -131,6 +173,22 @@ class GraphBuilder:
             found.add("general research")
         return sorted(found)
 
+    def synthetic_city(self) -> str:
+        return self.random.choice(self.SYNTHETIC_CITIES)
+
+    def synthetic_pages(self) -> str:
+        return self.random.choice(self.SYNTHETIC_PAGES)
+
+    def synthetic_issn(self) -> str:
+        first = self.random.randint(1000, 9999)
+        second = self.random.randint(1000, 9999)
+        return f"{first}-{second}"
+
+    def synthetic_abstract(self, title: str) -> str:
+        topic = (title or "this topic").strip().rstrip(".").lower()
+        template = self.random.choice(self.ABSTRACT_TEMPLATES)
+        return template.format(topic=topic)
+
     def add_author(self, author_name: str) -> str:
         author_id = f"author_{slug(author_name)}"
         self.authors.setdefault(author_id, {"authorId": author_id, "name": author_name})
@@ -162,8 +220,8 @@ class GraphBuilder:
                 "DOI": cited_doi,
                 "title": raw_cite,
                 "year": 2000,
-                "abstract": f"Synthetic abstract for {raw_cite}.",
-                "pages": "unknown",
+                "abstract": self.synthetic_abstract(raw_cite),
+                "pages": self.synthetic_pages(),
             },
         )
         return cited_doi
@@ -181,7 +239,7 @@ class GraphBuilder:
 
         paper_doi = self.make_paper_doi(row, "article")
         year = safe_int(row.get("year"), 2000)
-        pages = (row.get("pages") or "unknown").strip()
+        pages = (row.get("pages") or "").strip() or self.synthetic_pages()
         volume = str(row.get("volume") or "1").strip()
 
         self.papers.setdefault(
@@ -190,7 +248,7 @@ class GraphBuilder:
                 "DOI": paper_doi,
                 "title": title,
                 "year": year,
-                "abstract": f"Synthetic abstract for {title}.",
+                "abstract": self.synthetic_abstract(title),
                 "pages": pages,
             },
         )
@@ -216,7 +274,7 @@ class GraphBuilder:
 
         self.journals.setdefault(
             journal_id,
-            {"journalId": journal_id, "name": journal_name, "issn": "unknown"},
+            {"journalId": journal_id, "name": journal_name, "issn": self.synthetic_issn()},
         )
         self.journal_volumes.setdefault(
             jv_id,
@@ -247,7 +305,7 @@ class GraphBuilder:
 
         paper_doi = self.make_paper_doi(row, "inproceedings")
         year = safe_int(row.get("year"), 2000)
-        pages = (row.get("pages") or "unknown").strip()
+        pages = (row.get("pages") or "").strip() or self.synthetic_pages()
 
         self.papers.setdefault(
             paper_doi,
@@ -255,7 +313,7 @@ class GraphBuilder:
                 "DOI": paper_doi,
                 "title": title,
                 "year": year,
-                "abstract": f"Synthetic abstract for {title}.",
+                "abstract": self.synthetic_abstract(title),
                 "pages": pages,
             },
         )
@@ -279,13 +337,18 @@ class GraphBuilder:
         venue_id = f"venue_{slug(venue_name)}"
         edition_id = f"edition_{slug(venue_name)}_{year}"
 
-        city = (row.get("address") or "Unknown City").strip() or "Unknown City"
+        city = (row.get("address") or "").strip() or self.synthetic_city()
         proceedings_title = f"Proceedings of {venue_name} {year}"
 
         self.venues.setdefault(venue_id, {"venueId": venue_id, "name": venue_name})
         self.editions.setdefault(
             edition_id,
-            {"editionId": edition_id, "year": year, "city": city, "proceedingsTitle": proceedings_title},
+            {
+                "editionId": edition_id,
+                "year": year,
+                "city": city,
+                "proceedingsTitle": proceedings_title,
+            },
         )
 
         self.edition_of.add((edition_id, venue_id))
