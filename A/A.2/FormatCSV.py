@@ -226,6 +226,97 @@ class GraphBuilder:
         )
         return cited_doi
 
+    def normalize_venue_name(self, text: str) -> str:
+        text = (text or "").strip()
+        text = re.sub(r"\s+", " ", text)
+
+        prefixes = [
+            r"^proceedings of the\s+",
+            r"^proceedings of\s+the\s+",
+            r"^proceedings of\s+",
+            r"^selected papers from\s+the\s+",
+            r"^selected papers of\s+the\s+",
+        ]
+        low = text.lower()
+        for pattern in prefixes:
+            new_low = re.sub(pattern, "", low, flags=re.IGNORECASE).strip()
+            if new_low != low:
+                text = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
+                low = new_low
+
+        text = re.sub(r"\b\d{4}\b", "", text).strip(" ,:-")
+        text = re.sub(r"\s+", " ", text)
+        return text
+
+    def looks_like_venue_title(self, title: str) -> bool:
+        low = (title or "").lower()
+        markers = [
+            "proceedings",
+            "conference",
+            "workshop",
+            "symposium",
+            "forum",
+            "colloquium",
+        ]
+        return any(m in low for m in markers)
+
+    def find_existing_venue_id(self, candidate_name: str) -> Optional[str]:
+        cand_slug = slug(self.normalize_venue_name(candidate_name))
+        if not cand_slug or cand_slug == "unknown":
+            return None
+
+        direct_id = f"venue_{cand_slug}"
+        if direct_id in self.venues:
+            return direct_id
+
+        for venue_id, venue in self.venues.items():
+            existing_slug = slug(self.normalize_venue_name(venue.get("name", "")))
+            if existing_slug == cand_slug:
+                return venue_id
+            if cand_slug in existing_slug or existing_slug in cand_slug:
+                return venue_id
+
+        return None
+
+    def find_existing_edition_id(self, venue_id: str, year: int) -> Optional[str]:
+        for edition_id, linked_venue_id in self.edition_of:
+            if linked_venue_id == venue_id:
+                edition = self.editions.get(edition_id)
+                if edition and edition.get("year") == year:
+                    return edition_id
+        return None
+
+    def create_or_get_edition(self, venue_name: str, year: int, city: str, proceedings_title: str) -> Tuple[str, str]:
+        venue_id = self.find_existing_venue_id(venue_name)
+        if venue_id is None:
+            venue_id = f"venue_{slug(venue_name)}"
+            self.venues.setdefault(venue_id, {"venueId": venue_id, "name": venue_name})
+
+        edition_id = self.find_existing_edition_id(venue_id, year)
+        if edition_id is None:
+            edition_id = f"edition_{slug(self.venues[venue_id]['name'])}_{year}"
+            self.editions.setdefault(
+                edition_id,
+                {
+                    "editionId": edition_id,
+                    "year": year,
+                    "city": city,
+                    "proceedingsTitle": proceedings_title,
+                },
+            )
+            self.edition_of.add((edition_id, venue_id))
+        else:
+            edition = self.editions[edition_id]
+            if city and edition.get("city") in ("", None):
+                edition["city"] = city
+            if proceedings_title and (
+                not edition.get("proceedingsTitle")
+                or str(edition.get("proceedingsTitle", "")).startswith("Proceedings of ")
+            ):
+                edition["proceedingsTitle"] = proceedings_title
+
+        return venue_id, edition_id
+
     def process_article_row(self, row: Dict[str, str]) -> None:
         key = (row.get("key") or "").strip()
         if key.startswith("dblpnote/"):
@@ -334,24 +425,17 @@ class GraphBuilder:
             self.add_keyword(kw)
             self.has_keyword.add((paper_doi, kw))
 
-        venue_id = f"venue_{slug(venue_name)}"
-        edition_id = f"edition_{slug(venue_name)}_{year}"
-
         city = (row.get("address") or "").strip() or self.synthetic_city()
-        proceedings_title = f"Proceedings of {venue_name} {year}"
+        proceedings_title = (row.get("booktitle") or "").strip()
+        proceedings_title = f"Proceedings of {proceedings_title} {year}"
 
-        self.venues.setdefault(venue_id, {"venueId": venue_id, "name": venue_name})
-        self.editions.setdefault(
-            edition_id,
-            {
-                "editionId": edition_id,
-                "year": year,
-                "city": city,
-                "proceedingsTitle": proceedings_title,
-            },
+        _, edition_id = self.create_or_get_edition(
+            venue_name=venue_name,
+            year=year,
+            city=city,
+            proceedings_title=proceedings_title,
         )
 
-        self.edition_of.add((edition_id, venue_id))
         self.published_in_edition.add((paper_doi, edition_id))
 
         for cited in split_multi(row.get("cite", "")):
@@ -361,6 +445,68 @@ class GraphBuilder:
             if not cited_paper_doi:
                 cited_paper_doi = self.add_citation_stub(cited)
             self.cites.add((paper_doi, cited_paper_doi))
+
+    def process_proceedings_row(self, row: Dict[str, str]) -> None:
+        key = (row.get("key") or "").strip()
+        if key.startswith("dblpnote/"):
+            return
+
+        year = safe_int(row.get("year"), None)
+        if year is None:
+            return
+
+        raw_title = (row.get("title") or "").strip()
+        raw_booktitle = (row.get("booktitle") or "").strip()
+        raw_address = (row.get("address") or "").strip()
+
+        if not raw_title and not raw_booktitle:
+            return
+
+        venue_name = raw_booktitle.strip()
+        if not venue_name:
+            if not self.looks_like_venue_title(raw_title):
+                return
+            venue_name = self.normalize_venue_name(raw_title)
+
+        if not venue_name:
+            return
+
+        proceedings_title = raw_title or f"Proceedings of {venue_name} {year}"
+        city = raw_address.strip()
+
+        venue_id = self.find_existing_venue_id(venue_name)
+        if venue_id is None:
+            venue_id = f"venue_{slug(venue_name)}"
+            self.venues.setdefault(venue_id, {"venueId": venue_id, "name": venue_name})
+
+        edition_id = self.find_existing_edition_id(venue_id, year)
+        if edition_id is None:
+            edition_id = f"edition_{slug(self.venues[venue_id]['name'])}_{year}"
+            self.editions.setdefault(
+                edition_id,
+                {
+                    "editionId": edition_id,
+                    "year": year,
+                    "city": city or self.synthetic_city(),
+                    "proceedingsTitle": proceedings_title,
+                },
+            )
+            self.edition_of.add((edition_id, venue_id))
+            return
+
+        edition = self.editions[edition_id]
+
+        current_city = (edition.get("city") or "").strip()
+        if city and (not current_city or current_city in self.SYNTHETIC_CITIES):
+            edition["city"] = city
+
+        current_title = (edition.get("proceedingsTitle") or "").strip()
+        if proceedings_title and (
+            not current_title
+            or current_title.startswith("Proceedings of ")
+            or current_title == f"Proceedings of {self.venues[venue_id]['name']} {year}"
+        ):
+            edition["proceedingsTitle"] = proceedings_title
 
     def synthesize_reviewers(self) -> None:
         author_ids = sorted(self.all_author_ids)
@@ -419,6 +565,8 @@ def main() -> None:
     parser.add_argument("--article-header", required=True)
     parser.add_argument("--inproceedings", required=True)
     parser.add_argument("--inproceedings-header", required=True)
+    parser.add_argument("--proceedings")
+    parser.add_argument("--proceedings-header")
     parser.add_argument("--out", default="neo4j_import")
     parser.add_argument("--reviewers-per-paper", type=int, default=3)
     parser.add_argument("--seed", type=int, default=42)
@@ -438,6 +586,13 @@ def main() -> None:
     )
     for row in inproceedings_rows:
         builder.process_inproceedings_row(row)
+
+    if args.proceedings and args.proceedings_header:
+        proceedings_rows = read_intermediate_with_header(
+            args.proceedings, args.proceedings_header, limit=args.limit
+        )
+        for row in proceedings_rows:
+            builder.process_proceedings_row(row)
 
     builder.synthesize_reviewers()
     builder.write_csv(args.out)
