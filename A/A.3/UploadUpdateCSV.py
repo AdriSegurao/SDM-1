@@ -1,223 +1,303 @@
-#!/usr/bin/env python3
-
 import argparse
-import os
-import subprocess
-import tempfile
-from typing import List
+import csv
+from pathlib import Path
+
+from neo4j import GraphDatabase
 
 
-REQUIRED_CSV_FILES = [
-    "authors.csv",
-    "papers.csv",
-    "keywords.csv",
-    "journals.csv",
-    "journal_volumes.csv",
-    "editions.csv",
-    "venues.csv",
-    "authored.csv",
-    "corresponding_author.csv",
-    "reviewed.csv",
-    "cites.csv",
-    "has_keyword.csv",
-    "published_in_volume.csv",
-    "published_in_edition.csv",
-    "volume_of.csv",
-    "edition_of.csv",
-]
+def read_csv_rows(csv_dir: Path, filename: str) -> list[dict[str, str]]:
+    path = csv_dir / filename
+    if not path.exists():
+        raise FileNotFoundError(f"CSV not found: {path}")
+
+    with path.open("r", encoding="utf-8", newline="") as f:
+        return list(csv.DictReader(f))
 
 
-def build_load_cypher(csv_url_prefix: str = "file:///") -> str:
-    prefix = csv_url_prefix
-    if not prefix.endswith("/"):
-        prefix += "/"
+def run_query_in_batches(session, query: str, rows: list[dict[str, str]], batch_size: int = 1000) -> None:
+    if not rows:
+        return
 
-    def csv_ref(name: str) -> str:
-        return f"{prefix}{name}"
-
-    return f"""
-CREATE CONSTRAINT author_id IF NOT EXISTS FOR (a:Author) REQUIRE a.authorId IS UNIQUE;
-CREATE CONSTRAINT paper_doi IF NOT EXISTS FOR (p:Paper) REQUIRE p.DOI IS UNIQUE;
-CREATE CONSTRAINT keyword_term IF NOT EXISTS FOR (k:Keyword) REQUIRE k.term IS UNIQUE;
-CREATE CONSTRAINT journal_id IF NOT EXISTS FOR (j:Journal) REQUIRE j.journalId IS UNIQUE;
-CREATE CONSTRAINT journal_volume_id IF NOT EXISTS FOR (jv:JournalVolume) REQUIRE jv.journalVolumeId IS UNIQUE;
-CREATE CONSTRAINT edition_id IF NOT EXISTS FOR (e:Edition) REQUIRE e.editionId IS UNIQUE;
-CREATE CONSTRAINT venue_id IF NOT EXISTS FOR (v:ConferenceWorkshop) REQUIRE v.venueId IS UNIQUE;
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("authors.csv")}' AS row
-MERGE (a:Author {{authorId: row.authorId}})
-SET a.name = row.name;
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("papers.csv")}' AS row
-MERGE (p:Paper {{DOI: row.DOI}})
-SET p.title = row.title,
-    p.year = toInteger(row.year),
-    p.abstract = row.abstract,
-    p.pages = row.pages;
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("keywords.csv")}' AS row
-MERGE (:Keyword {{term: row.term}});
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("journals.csv")}' AS row
-MERGE (j:Journal {{journalId: row.journalId}})
-SET j.name = row.name,
-    j.issn = row.issn;
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("journal_volumes.csv")}' AS row
-MERGE (jv:JournalVolume {{journalVolumeId: row.journalVolumeId}})
-SET jv.year = toInteger(row.year),
-    jv.volumeNumber = row.volumeNumber;
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("editions.csv")}' AS row
-MERGE (e:Edition {{editionId: row.editionId}})
-SET e.year = toInteger(row.year),
-    e.city = row.city,
-    e.proceedingsTitle = row.proceedingsTitle;
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("venues.csv")}' AS row
-MERGE (v:ConferenceWorkshop {{venueId: row.venueId}})
-SET v.name = row.name;
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("authored.csv")}' AS row
-MATCH (a:Author {{authorId: row.authorId}})
-MATCH (p:Paper {{DOI: row.DOI}})
-MERGE (a)-[r:AUTHORED]->(p)
-SET r.position = toInteger(row.position);
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("corresponding_author.csv")}' AS row
-MATCH (a:Author {{authorId: row.authorId}})
-MATCH (p:Paper {{DOI: row.DOI}})
-MERGE (p)-[:CORRESPONDING_AUTHOR]->(a);
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("reviewed.csv")}' AS row
-MATCH (a:Author {{authorId: row.authorId}})
-MATCH (p:Paper {{DOI: row.DOI}})
-MERGE (a)-[:REVIEWED]->(p);
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("cites.csv")}' AS row
-MATCH (p1:Paper {{DOI: row.citingDOI}})
-MATCH (p2:Paper {{DOI: row.citedDOI}})
-MERGE (p1)-[:CITES]->(p2);
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("has_keyword.csv")}' AS row
-MATCH (p:Paper {{DOI: row.DOI}})
-MATCH (k:Keyword {{term: row.term}})
-MERGE (p)-[:HAS_KEYWORD]->(k);
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("published_in_volume.csv")}' AS row
-MATCH (p:Paper {{DOI: row.DOI}})
-MATCH (jv:JournalVolume {{journalVolumeId: row.journalVolumeId}})
-MERGE (p)-[:PUBLISHED_IN]->(jv);
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("published_in_edition.csv")}' AS row
-MATCH (p:Paper {{DOI: row.DOI}})
-MATCH (e:Edition {{editionId: row.editionId}})
-MERGE (p)-[:PUBLISHED_IN]->(e);
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("volume_of.csv")}' AS row
-MATCH (jv:JournalVolume {{journalVolumeId: row.journalVolumeId}})
-MATCH (j:Journal {{journalId: row.journalId}})
-MERGE (jv)-[:VOLUME_OF]->(j);
-
-LOAD CSV WITH HEADERS FROM '{csv_ref("edition_of.csv")}' AS row
-MATCH (e:Edition {{editionId: row.editionId}})
-MATCH (v:ConferenceWorkshop {{venueId: row.venueId}})
-MERGE (e)-[:EDITION_OF]->(v);
-""".strip() + "\n"
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i:i + batch_size]
+        session.run(query, rows=batch).consume()
 
 
-def check_required_csv(csv_dir: str) -> List[str]:
-    missing = []
-    for name in REQUIRED_CSV_FILES:
-        if not os.path.isfile(os.path.join(csv_dir, name)):
-            missing.append(name)
-    return missing
-
-
-def write_load_cypher(out_path: str, csv_url_prefix: str) -> None:
-    query = build_load_cypher(csv_url_prefix=csv_url_prefix)
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(query)
-
-
-def run_cypher_shell(
-    cypher_shell: str,
-    address: str,
+def run_neo4j_import(
+    uri: str,
     user: str,
     password: str,
     database: str,
-    query: str,
+    csv_dir: Path,
+    batch_size: int,
 ) -> None:
-    with tempfile.NamedTemporaryFile("w", suffix=".cypher", delete=False, encoding="utf-8") as tmp:
-        tmp.write(query)
-        tmp_path = tmp.name
+    print(f"Connecting to Neo4j at {uri} ...")
+    driver = GraphDatabase.driver(uri, auth=(user, password))
+
+    constraints = [
+        ("Creating constraint Organization.orgId ...",
+         "CREATE CONSTRAINT organization_id IF NOT EXISTS FOR (o:Organization) REQUIRE o.orgId IS UNIQUE"),
+        ("Creating constraint Author.authorId ...",
+         "CREATE CONSTRAINT author_id IF NOT EXISTS FOR (a:Author) REQUIRE a.authorId IS UNIQUE"),
+        ("Creating constraint Paper.DOI ...",
+         "CREATE CONSTRAINT paper_doi IF NOT EXISTS FOR (p:Paper) REQUIRE p.DOI IS UNIQUE"),
+        ("Creating constraint Keyword.term ...",
+         "CREATE CONSTRAINT keyword_term IF NOT EXISTS FOR (k:Keyword) REQUIRE k.term IS UNIQUE"),
+        ("Creating constraint Journal.journalId ...",
+         "CREATE CONSTRAINT journal_id IF NOT EXISTS FOR (j:Journal) REQUIRE j.journalId IS UNIQUE"),
+        ("Creating constraint JournalVolume.journalVolumeId ...",
+         "CREATE CONSTRAINT journal_volume_id IF NOT EXISTS FOR (jv:JournalVolume) REQUIRE jv.journalVolumeId IS UNIQUE"),
+        ("Creating constraint Edition.editionId ...",
+         "CREATE CONSTRAINT edition_id IF NOT EXISTS FOR (e:Edition) REQUIRE e.editionId IS UNIQUE"),
+        ("Creating constraint ConferenceWorkshop.venueId ...",
+         "CREATE CONSTRAINT venue_id IF NOT EXISTS FOR (v:ConferenceWorkshop) REQUIRE v.venueId IS UNIQUE"),
+    ]
+
+    node_loads = [
+        (
+            "Loading Organization nodes ...",
+            "organizations.csv",
+            """
+            UNWIND $rows AS row
+            MERGE (o:Organization {orgId: row.orgId})
+            SET o.name = row.name,
+                o.type = row.type
+            """,
+        ),
+        (
+            "Loading Author nodes ...",
+            "authors.csv",
+            """
+            UNWIND $rows AS row
+            MERGE (a:Author {authorId: row.authorId})
+            SET a.name = row.name
+            """,
+        ),
+        (
+            "Loading Paper nodes ...",
+            "papers.csv",
+            """
+            UNWIND $rows AS row
+            MERGE (p:Paper {DOI: row.DOI})
+            SET p.title = row.title,
+                p.year = toInteger(row.year),
+                p.abstract = row.abstract,
+                p.pages = row.pages
+            """,
+        ),
+        (
+            "Loading Keyword nodes ...",
+            "keywords.csv",
+            """
+            UNWIND $rows AS row
+            MERGE (:Keyword {term: row.term})
+            """,
+        ),
+        (
+            "Loading Journal nodes ...",
+            "journals.csv",
+            """
+            UNWIND $rows AS row
+            MERGE (j:Journal {journalId: row.journalId})
+            SET j.name = row.name,
+                j.issn = row.issn,
+                j.reviewerPolicyNumber = toInteger(row.reviewerPolicyNumber)
+            """,
+        ),
+        (
+            "Loading JournalVolume nodes ...",
+            "journal_volumes.csv",
+            """
+            UNWIND $rows AS row
+            MERGE (jv:JournalVolume {journalVolumeId: row.journalVolumeId})
+            SET jv.year = toInteger(row.year),
+                jv.volumeNumber = row.volumeNumber
+            """,
+        ),
+        (
+            "Loading Edition nodes ...",
+            "editions.csv",
+            """
+            UNWIND $rows AS row
+            MERGE (e:Edition {editionId: row.editionId})
+            SET e.year = toInteger(row.year),
+                e.city = row.city,
+                e.proceedingsTitle = row.proceedingsTitle
+            """,
+        ),
+        (
+            "Loading ConferenceWorkshop nodes ...",
+            "conference_workshops.csv",
+            """
+            UNWIND $rows AS row
+            MERGE (v:ConferenceWorkshop {venueId: row.venueId})
+            SET v.name = row.name,
+                v.reviewerPolicyNumber = toInteger(row.reviewerPolicyNumber)
+            """,
+        ),
+    ]
+
+    relationship_loads = [
+        (
+            "Creating AFFILIATED_WITH relationships ...",
+            "affiliated_with.csv",
+            """
+            UNWIND $rows AS row
+            MATCH (a:Author {authorId: row.authorId})
+            MATCH (o:Organization {orgId: row.orgId})
+            MERGE (a)-[:AFFILIATED_WITH]->(o)
+            """,
+        ),
+        (
+            "Creating AUTHORED relationships ...",
+            "authored.csv",
+            """
+            UNWIND $rows AS row
+            MATCH (a:Author {authorId: row.authorId})
+            MATCH (p:Paper {DOI: row.DOI})
+            MERGE (a)-[r:AUTHORED]->(p)
+            SET r.position = toInteger(row.position)
+            """,
+        ),
+        (
+            "Creating CORRESPONDING_AUTHOR relationships ...",
+            "corresponding_author.csv",
+            """
+            UNWIND $rows AS row
+            MATCH (a:Author {authorId: row.authorId})
+            MATCH (p:Paper {DOI: row.DOI})
+            MERGE (p)-[:CORRESPONDING_AUTHOR]->(a)
+            """,
+        ),
+        (
+            "Creating REVIEWED relationships ...",
+            "reviewed.csv",
+            """
+            UNWIND $rows AS row
+            MATCH (a:Author {authorId: row.authorId})
+            MATCH (p:Paper {DOI: row.DOI})
+            MERGE (a)-[r:REVIEWED]->(p)
+            SET r.content = row.content,
+                r.suggestedDecision = row.suggestedDecision
+            """,
+        ),
+        (
+            "Creating CITES relationships ...",
+            "cites.csv",
+            """
+            UNWIND $rows AS row
+            MATCH (p1:Paper {DOI: row.citingDOI})
+            MATCH (p2:Paper {DOI: row.citedDOI})
+            MERGE (p1)-[:CITES]->(p2)
+            """,
+        ),
+        (
+            "Creating HAS_KEYWORD relationships ...",
+            "has_keyword.csv",
+            """
+            UNWIND $rows AS row
+            MATCH (p:Paper {DOI: row.DOI})
+            MATCH (k:Keyword {term: row.term})
+            MERGE (p)-[:HAS_KEYWORD]->(k)
+            """,
+        ),
+        (
+            "Creating PUBLISHED_IN (volume) relationships ...",
+            "published_in_volume.csv",
+            """
+            UNWIND $rows AS row
+            MATCH (p:Paper {DOI: row.DOI})
+            MATCH (jv:JournalVolume {journalVolumeId: row.journalVolumeId})
+            MERGE (p)-[:PUBLISHED_IN]->(jv)
+            """,
+        ),
+        (
+            "Creating PUBLISHED_IN (edition) relationships ...",
+            "published_in_edition.csv",
+            """
+            UNWIND $rows AS row
+            MATCH (p:Paper {DOI: row.DOI})
+            MATCH (e:Edition {editionId: row.editionId})
+            MERGE (p)-[:PUBLISHED_IN]->(e)
+            """,
+        ),
+        (
+            "Creating VOLUME_OF relationships ...",
+            "volume_of.csv",
+            """
+            UNWIND $rows AS row
+            MATCH (jv:JournalVolume {journalVolumeId: row.journalVolumeId})
+            MATCH (j:Journal {journalId: row.journalId})
+            MERGE (jv)-[:VOLUME_OF]->(j)
+            """,
+        ),
+        (
+            "Creating EDITION_OF relationships ...",
+            "edition_of.csv",
+            """
+            UNWIND $rows AS row
+            MATCH (e:Edition {editionId: row.editionId})
+            MATCH (v:ConferenceWorkshop {venueId: row.venueId})
+            MERGE (e)-[:EDITION_OF]->(v)
+            """,
+        ),
+    ]
 
     try:
-        cmd = [
-            cypher_shell,
-            "-a",
-            address,
-            "-u",
-            user,
-            "-p",
-            password,
-            "-d",
-            database,
-            "-f",
-            tmp_path,
-        ]
-        subprocess.run(cmd, check=True)
+        driver.verify_connectivity()
+
+        with driver.session(database=database) as session:
+            for message, query in constraints:
+                print(message)
+                session.run(query).consume()
+
+            for message, filename, query in node_loads:
+                print(message)
+                rows = read_csv_rows(csv_dir, filename)
+                run_query_in_batches(session, query, rows, batch_size=batch_size)
+
+            for message, filename, query in relationship_loads:
+                print(message)
+                rows = read_csv_rows(csv_dir, filename)
+                run_query_in_batches(session, query, rows, batch_size=batch_size)
+
     finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        driver.close()
+
+    print("Neo4j upload completed.")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Upload graph CSV files (generated by FormatCSV.py) into Neo4j."
+        description="Upload graph CSV files from any directory into Neo4j using Python + UNWIND."
     )
-    parser.add_argument("--csv-dir", default="neo4j_import")
-    parser.add_argument("--cypher-out", default=None)
-    parser.add_argument(
-        "--csv-url-prefix",
-        default="file:///",
-        help="URL prefix used inside LOAD CSV. Example: file:/// or https://host/path/",
-    )
-    parser.add_argument("--run", action="store_true", help="Execute the query using cypher-shell.")
-    parser.add_argument("--cypher-shell", default="cypher-shell")
-    parser.add_argument("--address", default="bolt://localhost:7687")
-    parser.add_argument("--user")
-    parser.add_argument("--password")
+    parser.add_argument("--user", default="neo4j")
+    parser.add_argument("--password", required=True)
     parser.add_argument("--database", default="neo4j")
+    parser.add_argument(
+        "--csv-dir",
+        required=True,
+        type=Path,
+        help="Directory containing all CSV files.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1000,
+        help="Number of CSV rows sent to Neo4j per batch.",
+    )
+    parser.add_argument("--uri", default="neo4j://127.0.0.1:7687")
+
     args = parser.parse_args()
 
-    missing = check_required_csv(args.csv_dir) 
-    if missing:
-        raise SystemExit(
-            "Missing CSV files in --csv-dir:\n- " + "\n- ".join(missing)
-        )
-
-    cypher_out = args.cypher_out or os.path.join(args.csv_dir, "load_a2.cypher")
-    write_load_cypher(cypher_out, args.csv_url_prefix)
-    print(f"Cypher upload script generated: {cypher_out}")
-
-    if not args.run:
-        print("Run with --run to execute it via cypher-shell.")
-        return
-
-    if not args.user or not args.password:
-        raise SystemExit("When using --run, both --user and --password are required.")
-
-    query = build_load_cypher(csv_url_prefix=args.csv_url_prefix)
-    run_cypher_shell(
-        cypher_shell=args.cypher_shell,
-        address=args.address,
+    run_neo4j_import(
+        uri=args.uri,
         user=args.user,
         password=args.password,
         database=args.database,
-        query=query,
+        csv_dir=args.csv_dir,
+        batch_size=args.batch_size,
     )
-    print("Neo4j upload completed.")
 
 
 if __name__ == "__main__":
