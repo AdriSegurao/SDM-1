@@ -1,10 +1,5 @@
+import argparse
 from neo4j import GraphDatabase
-
-
-URI = "bolt://localhost:7687"
-USER = "neo4j"
-PASSWORD = "tu_password"
-
 
 # Find the h-index of the authors in your graph.
 QUERY_B4 = """
@@ -22,8 +17,29 @@ RETURN a.authorId AS author_id,
 ORDER BY h_index DESC, author
 """
 
-def run_query():
-    driver = GraphDatabase.driver(URI, auth=(USER, PASSWORD))
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Query the h-index of authors in Neo4j."
+    )
+    parser.add_argument(
+        "--uri",
+        default="neo4j://127.0.0.1:7687",
+        help="Neo4j connection URI"
+    )
+    parser.add_argument(
+        "--user",
+        default="neo4j",
+        help="Neo4j username"
+    )
+    parser.add_argument(
+        "--password",
+        required=True,
+        help="Neo4j password"
+    )
+    return parser.parse_args()
+
+def run_query(uri, user, password):
+    driver = GraphDatabase.driver(uri, auth=(user, password))
 
     try:
         with driver.session() as session:
@@ -38,9 +54,12 @@ def run_query():
                 print(f"  h-index: {h_index}")
                 print()
 
+    except Exception as e:
+        print(f"Error while connecting or executing the query: {e}")
+
     finally:
         driver.close()
 
-
 if __name__ == "__main__":
-    run_query()
+    args = parse_args()
+    run_query(args.uri, args.user, args.password)

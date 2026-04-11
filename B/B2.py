@@ -1,12 +1,8 @@
+import argparse
 from neo4j import GraphDatabase
 
-
-URI = "bolt://localhost:7687"
-USER = "neo4j"
-PASSWORD = "tu_password"
-
-
-# For each conference/workshop find its community: i.e., those authors that have published papers on that conference/workshop in, at least, 4 different editions.
+# For each conference/workshop find its community:
+# authors that have published in at least 4 different editions.
 QUERY_B2 = """
 MATCH (cw:ConferenceWorkshop)<-[:EDITION_OF]-(e:Edition)<-[:PUBLISHED_IN]-(p:Paper)<-[:AUTHORED]-(a:Author)
 WITH cw, a, count(DISTINCT e) AS numEditions
@@ -18,8 +14,29 @@ RETURN cw.name AS conference,
 ORDER BY conference, numEditions DESC, author
 """
 
-def run_query():
-    driver = GraphDatabase.driver(URI, auth=(USER, PASSWORD))
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Query the author community for each conference/workshop in Neo4j."
+    )
+    parser.add_argument(
+        "--uri",
+        default="neo4j://127.0.0.1:7687",
+        help="Neo4j connection URI"
+    )
+    parser.add_argument(
+        "--user",
+        default="neo4j",
+        help="Neo4j username"
+    )
+    parser.add_argument(
+        "--password",
+        required=True,
+        help="Neo4j password"
+    )
+    return parser.parse_args()
+
+def run_query(uri, user, password):
+    driver = GraphDatabase.driver(uri, auth=(user, password))
 
     try:
         with driver.session() as session:
@@ -39,9 +56,12 @@ def run_query():
 
                 print(f"  - {author} (authorId={author_id}, editions={num_editions})")
 
+    except Exception as e:
+        print(f"Error while connecting or executing the query: {e}")
+
     finally:
         driver.close()
 
-
 if __name__ == "__main__":
-    run_query()
+    args = parse_args()
+    run_query(args.uri, args.user, args.password)

@@ -7,7 +7,7 @@ Property Graphs lab deliverable for the SDM course in MDS.
 Run the commands below from the project root.
 If you are using PowerShell, commands are written in copy/paste one-line format. 
 
-The scripts are assumed to be executed from ```A/A.2/``` folder.
+The scripts are assumed to be executed from ```A/A.2/``` folder or ```A/A.3/```
 
 ## 1) Convert DBLP XML to CSV
 
@@ -44,10 +44,15 @@ Optional arguments:
 --proceedings PATH_TO_PROCEEDINGS_CSV --proceedings-header PATH_TO_PROCEEDINGS_HEADER_CSV
 ```
 
-Example (if step 1 was executed as recommended):
+Example for A.2 (if step 1 was executed as recommended):
 
 ```powershell
-python FormatCSV.py --article data/csv_dblp_data/output_article.csv --article-header data/csv_dblp_data/output_article_header.csv --inproceedings data/csv_dblp_data/output_inproceedings.csv --inproceedings-header data/csv_dblp_data/output_inproceedings_header.csv --proceedings data/csv_dblp_data/output_proceedings.csv --proceedings-header data/csv_dblp_data/output_proceedings_header.csv --out data/csv_graphmodel_data --limit 10000
+python FormatCSV.py --article data/csv_dblp_data/output_article.csv --article-header data/csv_dblp_data/output_article_header.csv --inproceedings data/csv_dblp_data/output_inproceedings.csv --inproceedings-header data/csv_dblp_data/output_inproceedings_header.csv --proceedings data/csv_dblp_data/output_proceedings.csv --proceedings-header data/csv_dblp_data/output_proceedings_header.csv --out data/csv_graphmodel_data --limit 20000
+```
+Example for A.3 (if step 1 was executed as recommended):
+
+```powershell
+python FormatUpdateCSV.py --article data/csv_dblp_data/output_article.csv --article-header data/csv_dblp_data/output_article_header.csv --inproceedings data/csv_dblp_data/output_inproceedings.csv --inproceedings-header data/csv_dblp_data/output_inproceedings_header.csv --proceedings data/csv_dblp_data/output_proceedings.csv --proceedings-header data/csv_dblp_data/output_proceedings_header.csv --out data/csv_graphmodel_data --limit 20000
 ```
 
 ## 3) Upload CSV files to the graph database
@@ -66,8 +71,31 @@ Default values:
 - `--user`: `neo4j`
 - `--database`: `neo4j`
 
-Example (using default `uri`, `user`, and `database`):
+Example A.2 (using default `uri`, `user`, and `database`):
 
 ```powershell
 python UploadCSV.py --password "prueba123" --csv-dir data/csv_graphmodel_data
+```
+
+Example A.3 (using default `uri`, `user`, and `database`):
+
+```powershell
+python UploadUpdateCSV.py --password "prueba123" --csv-dir data/csv_graphmodel_data
+```
+
+
+## 4) Execute queries from python scripts
+
+General command:
+
+X is the letter of the section and Y is the script number
+
+```powershell
+python XY.py --password "prueba123" 
+```
+
+Example:
+
+```powershell
+python B1.py --password "prueba123"
 ```
