@@ -16,6 +16,20 @@ The project uses these data folders at project root:
 - `data/csv_graphmodel_A2_data/`
 - `data/csv_graphmodel_A3_data/`
 
+Before running the project, the DBLP source files must be downloaded from:
+
+https://dblp.org/xml/
+
+Required files:
+
+- `dblp.xml.gz`
+- `dblp.dtd`
+
+After downloading:
+
+1. Extract the XML file contained inside `dblp.xml.gz`.
+2. Place the extracted XML file and `dblp.dtd` inside `data/xml_dblp_data/`.
+
 ## 1) Convert DBLP XML to CSV
 
 This script comes from ThomHurks' repository:  
@@ -91,7 +105,11 @@ Recommended command A.3:
 python UploadUpdateCSV.py --password TU_PASSWORD
 ```
 
-## 3) Execute queries from python scripts
+## 4) Execute queries from python scripts
+
+For section `D`, the Neo4j instance must have the `GDS` (`Graph Data Science`) plugin installed and enabled before running the scripts.
+After installing the plugin, the instance must be restarted. 
+Without this plugin, the graph algorithms used in `D1.py` and `D2.py` will not be available.
 
 General command:
 X is the letter of the section and Y is the script number
