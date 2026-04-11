@@ -4,6 +4,7 @@ from pathlib import Path
 
 from neo4j import GraphDatabase
 
+
 def read_csv_rows(csv_dir: Path, filename: str) -> list[dict[str, str]]:
     path = csv_dir / filename
     if not path.exists():
@@ -17,9 +18,17 @@ def run_query_in_batches(session, query: str, rows: list[dict[str, str]], batch_
     if not rows:
         return
 
-    for i in range(0, len(rows), batch_size):
-        batch = rows[i : i + batch_size]
+    total = len(rows)
+    for i in range(0, total, batch_size):
+        batch = rows[i:i + batch_size]
         session.run(query, rows=batch).consume()
+        print(f"  Processed {min(i + batch_size, total)}/{total}", flush=True)
+
+
+def get_default_csv_dir() -> Path:
+    script_dir = Path(__file__).resolve().parent
+    project_root = script_dir.parent.parent
+    return project_root / "data" / "csv_graphmodel_A2_data"
 
 
 def run_neo4j_import(
@@ -30,7 +39,8 @@ def run_neo4j_import(
     csv_dir: Path,
     batch_size: int,
 ) -> None:
-    print(f"Connecting to Neo4j at {uri} ...")
+    print(f"Using CSV directory: {csv_dir}", flush=True)
+    print(f"Connecting to Neo4j at {uri} ...", flush=True)
     driver = GraphDatabase.driver(uri, auth=(user, password))
 
     constraints = [
@@ -214,38 +224,32 @@ def run_neo4j_import(
 
         with driver.session(database=database) as session:
             for message, query in constraints:
-                print(message)
+                print(message, flush=True)
                 session.run(query).consume()
 
             for message, filename, query in node_loads:
-                print(message)
+                print(message, flush=True)
                 rows = read_csv_rows(csv_dir, filename)
                 run_query_in_batches(session, query, rows, batch_size=batch_size)
 
             for message, filename, query in relationship_loads:
-                print(message)
+                print(message, flush=True)
                 rows = read_csv_rows(csv_dir, filename)
                 run_query_in_batches(session, query, rows, batch_size=batch_size)
 
     finally:
         driver.close()
 
-    print("Neo4j upload completed.")
+    print("Neo4j upload completed.", flush=True)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Upload graph CSV files from any directory into Neo4j using Python + UNWIND."
+        description="Upload graph CSV files from data/csv_graphmodel_A2_data into Neo4j using Python + UNWIND."
     )
     parser.add_argument("--user", default="neo4j")
     parser.add_argument("--password", required=True)
     parser.add_argument("--database", default="neo4j")
-    parser.add_argument(
-        "--csv-dir",
-        required=True,
-        type=Path,
-        help="Directory containing all CSV files.",
-    )
     parser.add_argument(
         "--batch-size",
         type=int,
@@ -256,14 +260,19 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    csv_dir = get_default_csv_dir()
+
+    if not csv_dir.exists():
+        raise FileNotFoundError(f"CSV directory not found: {csv_dir}")
+
     run_neo4j_import(
         uri=args.uri,
         user=args.user,
         password=args.password,
         database=args.database,
-        csv_dir=args.csv_dir,
+        csv_dir=csv_dir,
         batch_size=args.batch_size,
-    )   
+    )
 
 
 if __name__ == "__main__":
