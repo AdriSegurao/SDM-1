@@ -2,6 +2,11 @@ import argparse
 
 from neo4j import GraphDatabase
 
+# Summary:
+# D2 projects the Paper-CITES graph in Neo4j GDS as an undirected graph and runs
+# the Louvain community detection algorithm to find groups of closely connected papers.
+# It prints the largest communities with their size, year range, sample paper titles
+# and sample keywords, then removes the temporary projected graph.
 
 GRAPH_NAME = "d2_paper_community_graph"
 

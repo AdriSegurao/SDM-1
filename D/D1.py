@@ -2,6 +2,11 @@ import argparse
 
 from neo4j import GraphDatabase
 
+# Summary:
+# D1 projects the Paper-CITES graph in Neo4j GDS as a directed graph and runs
+# PageRank to identify the most influential papers in the citation network.
+# It prints the top-ranked papers together with their DOI, year and number of
+# incoming citations, then removes the temporary projected graph.
 
 GRAPH_NAME = "d1_paper_citation_graph"
 

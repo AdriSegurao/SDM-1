@@ -8,6 +8,12 @@ from pathlib import Path
 from collections import Counter, defaultdict
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
+# Summary:
+# FormatCSV reads the intermediate DBLP CSV files, selects a curated subset of
+# articles and inproceedings, and transforms them into the node and relationship
+# CSVs of the A.2 graph model. During the process it infers keywords, creates
+# synthetic missing metadata, reinforces internal citations, assigns reviewers
+# and writes the final CSV dataset to data/csv_graphmodel_A2_data/.
 
 KEYWORD_FALLBACKS = {
     "graph": ["graph processing", "property graph"],

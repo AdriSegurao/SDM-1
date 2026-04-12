@@ -4,6 +4,12 @@ from pathlib import Path
 
 from neo4j import GraphDatabase
 
+# Summary:
+# UploadCSV reads the CSV files generated for the A.2 graph model and imports
+# them into Neo4j. It first creates the uniqueness constraints, then loads all
+# node types and relationships in batches with UNWIND queries until the full
+# graph dataset is stored in the database.
+
 
 def read_csv_rows(csv_dir: Path, filename: str) -> list[dict[str, str]]:
     path = csv_dir / filename
