@@ -7,6 +7,13 @@ Property Graphs lab deliverable for the SDM course in MDS.
 Run the commands below from the folder where the corresponding script is located.  
 If you are using PowerShell, commands are written in copy/paste one-line format.
 
+Before running the scripts, install the required Python packages from `requirements.txt`:
+```
+pip install -r requirements.txt
+```
+
+This installs the packages used by the project, including `lxml` and `neo4j`.
+
 The scripts are assumed to be executed from `A/A.2/` or `A/A.3/`.
 
 The project uses these data folders at project root:
