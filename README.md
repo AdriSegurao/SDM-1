@@ -56,6 +56,15 @@ Recommended command:
 python XMLtoCSV.py --outputfile output.csv --annotate
 ```
 
+Parameter summary for `XMLToCSV.py`:
+
+- `--xml-filename`: XML input file name inside `data/xml_dblp_data/` (`dblp.xml` by default).
+- `--dtd-filename`: DTD file name inside `data/xml_dblp_data/` (`dblp.dtd` by default).
+- `--outputfile`: base name used for the generated CSV files in `data/csv_dblp_data/`.
+- `--annotate`: generates extra header files with type information.
+- `--neo4j`: generates Neo4j-oriented headers and implies `--annotate`.
+- `--relations`: optional list of `attribute:relation` mappings to export some attributes as explicit relations.
+
 ## 2) Generate model CSV files
 This step uses the `article`, `inproceedings`, and `proceedings` CSVs generated in step 1 to create the node and relationship CSV files for the graph model.
 
@@ -81,6 +90,17 @@ Recommended command for A.3:
 python FormatUpdateCSV.py
 ```
 
+Parameter summary for `FormatCSV.py` and `FormatUpdateCSV.py`:
+
+- `--article`, `--article-header`, `--inproceedings`, `--inproceedings-header`, `--proceedings`, `--proceedings-header`: input file names read from `data/csv_dblp_data/`.
+- `--target-articles`: number of article rows selected for the curated dataset.
+- `--target-inproceedings`: number of inproceedings rows selected for the curated dataset.
+- `--scan-articles`, `--scan-inproceedings`, `--scan-proceedings`: optional limits on how many rows are scanned from each input file.
+- `--reviewers-per-paper`: number of synthetic reviewers assigned to each paper.
+- `--min-internal-cites`: minimum number of internal citations each paper should have after reinforcement.
+- `--max-internal-cites`: maximum number of internal citations each paper may have after reinforcement.
+- `--seed`: random seed used to make the generated dataset reproducible.
+
 ## 3) Upload CSV files to the graph database
 
 This script reads the CSV files generated in step 2 from `data/csv_graphmodel_A2_data/` or `data/csv_graphmodel_A3_data/` and loads them into Neo4j.
@@ -105,6 +125,14 @@ Recommended command A.3:
 python UploadUpdateCSV.py --password TU_PASSWORD
 ```
 
+Parameter summary for `UploadCSV.py` and `UploadUpdateCSV.py`:
+
+- `--user`: Neo4j username (`neo4j` by default).
+- `--password`: Neo4j password. This is the only required parameter.
+- `--database`: Neo4j database name (`neo4j` by default).
+- `--batch-size`: number of CSV rows sent to Neo4j per batch (`1000` by default).
+- `--uri`: Neo4j connection URI (`neo4j://127.0.0.1:7687` by default).
+
 ## 4) Execute queries from python scripts
 
 For section `D`, the Neo4j instance must have the `GDS` (`Graph Data Science`) plugin installed and enabled before running the scripts.
@@ -121,6 +149,13 @@ Example:
 ```
 python B1.py --password TU_PASSWORD
 ```
+
+Parameter summary for query scripts:
+
+- `B1.py`, `B2.py`, `B3.py`, `B4.py`: use `--uri`, `--user`, `--password` to connect to Neo4j.
+- `C1.py`, `C2.py`, `C3.py`, `C4.py`: use `--uri`, `--user`, `--password` to connect to Neo4j.
+- `D1.py`: uses `--uri`, `--user`, `--password`, `--database`, plus `--limit` for the number of ranked papers, `--max-iterations` for PageRank iterations, and `--damping-factor` for the PageRank damping value.
+- `D2.py`: uses `--uri`, `--user`, `--password`, `--database`, plus `--limit` for the number of communities shown, `--sample-size` for the number of sample paper titles per community, and `--keyword-sample` for the number of sample keywords per community.
 
 
 
